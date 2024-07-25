@@ -1,36 +1,22 @@
-"""
-     ^..^ CAT Soft - MS-Musiquery
-	 ----------------------------
-	 Script for 
-	    - getting tracks from the CUE files,
-		- searching for track in Spotify
-		- adding track to the given playlist 
-		- added encoding detection - 6 Feb 2024
-	-----------------------------
-	12 Jul 2023 || glebone@gmail.com 
-"""
 import re
 import spotipy
 import chardet
 import argparse
+import os
 from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
-
-
-
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Script to create Spotify playlist from CUE or TXT files.")
 parser.add_argument('-cue', type=str, help="Path to the CUE file.")
 parser.add_argument('-txt', type=str, help="Path to the TXT file.")
+parser.add_argument('-folder', type=str, help="Path to the folder containing music files.")
 args = parser.parse_args()
 
-
 # Set up your client credentials
-client_id = ""
-client_secret = ""
+client_id = ''
+client_secret = ''
 redirect_uri = "http://localhost:8888/callback"
-mi_playlist_id = "1O0GgXGfYaDXtxQcg9hjyt"  
-cue_file = "./2.cue"
+mi_playlist_id = "1iKbel9fJK63aJHGal7Qri"
 
 def get_tracks_from_cue(cue_file):
     tracks = []
@@ -49,70 +35,77 @@ def get_tracks_from_cue(cue_file):
         titles = title_pattern.findall(cue_sheet)
         performers = performer_pattern.findall(cue_sheet)
         titles = titles[1:]  # Skipping the first title as it may be the album's title
-        performers = performers[1:]  # Same for performers
-        tracks = [f'{performer} - {title}' for performer, title in zip(performers, titles)]
+
+    for title, performer in zip(titles, performers):
+        tracks.append((performer, title))
     return tracks
 
+def clean_and_format(line):
+    # Remove the './' prefix
+    line = line.lstrip('./')
+    # Remove leading numbers and spaces
+    line = re.sub(r'^\d+\s*', '', line)
+    # Remove the '.mp3' suffix and newline character
+    line = line.rstrip('.mp3\n')
+    return line
+
+def parse_filename(filename):
+    # Split artist and song title
+    parts = filename.split(' - ', 1)
+    if len(parts) == 2:
+        artist = parts[0].strip()
+        song = parts[1].strip()
+        return artist, song
+    return None, None
+
+def process_folder(folder_path):
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".cue") or filename.endswith(".txt"):
+            continue  # Skip CUE and TXT files
+        artist, track = parse_filename(filename)
+        if artist and track:
+            print(f"Artist: {artist}, Track: {track}")
+        else:
+            print(f"Could not parse filename: {filename}")
 
 def get_tracks_from_txt(txt_file):
     tracks = []
     with open(txt_file, 'r', encoding='utf-8') as f:
         for line in f:
-            # Assuming each line follows the 'Artist – Track Title' format
-            match = re.match(r'^(.*?) – (.*?)$', line.strip())
-            if match:
-                artist, title = match.groups()
-                tracks.append(f'{artist} - {title}')
+            line = line.strip()
+            if line:
+                cleaned_line = clean_and_format(line)
+                artist, track = parse_filename(cleaned_line)
+                if artist and track:
+                    tracks.append((artist, track))
+                else:
+                    print(f"Could not parse line: {line}")
     return tracks
 
-# Authenticate with Spotify
-sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id=client_id,
-                                               client_secret=client_secret,
-                                               redirect_uri=redirect_uri,
-                                               scope='user-read-private playlist-modify-private'))
+def search_and_add_to_playlist(sp, playlist_id, artist, track):
+    query = f"artist:{artist} track:{track}"
+    results = sp.search(q=query, type='track', limit=1)
+    if results['tracks']['items']:
+        track_id = results['tracks']['items'][0]['id']
+        sp.playlist_add_items(playlist_id, [track_id])
+        print(f"Added {artist} - {track} to playlist.")
+    else:
+        print(f"Track {artist} - {track} not found on Spotify.")
 
+if __name__ == "__main__":
+    sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        scope="playlist-modify-public playlist-modify-private"))
 
-if args.cue:
-    tracks = get_tracks_from_cue(args.cue)
-elif args.txt:
-    tracks = get_tracks_from_txt(args.txt)
-else:
-    raise ValueError("No valid input file provided. Use -cue or -txt.")
-											   
-# Get current user's info
-user_info = sp.current_user()
-# Extract user id
-user_id = user_info['id']
-
-
-print(tracks)
-
-
-if tracks:
-	for track_name in tracks:
-		print("Searching for track...")
-		print(track_name)
-		
-		results = sp.search(q=track_name, limit=1, type='track')
-		# Print results
-		first_track_uri = ""
-		if results:
-			for cur in results['tracks']['items']:
-				first_track_uri = cur['uri']
-				print("Found track:...")
-				print(first_track_uri)
-				break
-			print(first_track_uri)
-			sp.playlist_add_items(mi_playlist_id, [first_track_uri])
-			print("Track added to playlist")
-			print("=====================================")
-
-
-
-
-
-
-
-
-
-
+    if args.folder:
+        process_folder(args.folder)
+    elif args.cue:
+        tracks = get_tracks_from_cue(args.cue)
+        for artist, track in tracks:
+            search_and_add_to_playlist(sp, mi_playlist_id, artist, track)
+    elif args.txt:
+        tracks = get_tracks_from_txt(args.txt)
+        for artist, track in tracks:
+            search_and_add_to_playlist(sp, mi_playlist_id, artist, track)
